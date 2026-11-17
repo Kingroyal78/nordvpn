@@ -1,0 +1,18 @@
+# syntax=docker/dockerfile:1
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine3.23 AS build
+ARG TARGETOS
+ARG TARGETARCH
+WORKDIR /src
+COPY egress/go.mod egress/*.go ./
+RUN go test ./... && \
+    CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build -trimpath -ldflags="-s -w" -o /out/nordvpn-egress .
+
+FROM alpine:3.23
+RUN apk add --no-cache ca-certificates iproute2 nftables wireguard-tools-wg \
+        shadowsocks-rust-ssserver shadowsocks-rust-sslocal && \
+    addgroup -S -g 10001 egress && adduser -S -D -H -u 10001 -G egress egress
+COPY --from=build /out/nordvpn-egress /usr/local/bin/nordvpn-egress
+
+EXPOSE 8388/tcp 8388/udp
+HEALTHCHECK --interval=10s --timeout=2s --start-period=60s --retries=1 CMD ["nordvpn-egress", "healthcheck"]
+ENTRYPOINT ["nordvpn-egress"]

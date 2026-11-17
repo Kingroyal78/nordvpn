@@ -1,6 +1,10 @@
-# ⚠️ THIS REPOSITORY IS NOT MAINTAINED ⚠️
+# NordVPN images
 
-**I recommend switching to use [github.com/qdm12/gluetun](https://github.com/qdm12/gluetun) instead.**
+For the Sola WireGuard and Shadowsocks egress image, see the [deployment and release guide](EGRESS.md).
+
+## Legacy NordVPN CLI image
+
+The upstream CLI image is unmaintained. Its original usage documentation follows.
 
 ---
 

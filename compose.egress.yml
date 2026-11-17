@@ -1,0 +1,42 @@
+services:
+  nordvpn-egress:
+    image: ${EGRESS_IMAGE:-ghcr.io/kingroyal78/nordvpn-egress:v0.1.0}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, CHOWN, SETUID, SETGID]
+    security_opt: [no-new-privileges:true]
+    sysctls:
+      net.ipv4.conf.all.rp_filter: "2"
+    tmpfs:
+      - /run:rw,nosuid,nodev,noexec
+    ports:
+      - "127.0.0.1:${SS_HOST_PORT:-8473}:8388/tcp"
+      - "127.0.0.1:${SS_HOST_PORT:-8473}:8388/udp"
+    environment:
+      EGRESS_SERVERS_FILE: /etc/nordvpn/servers.json
+      WIREGUARD_PRIVATE_KEY_SECRETFILE: /run/secrets/wg-key
+      SHADOWSOCKS_PASSWORD_SECRETFILE: /run/secrets/ss-password
+      WIREGUARD_ADDRESSES: ${WIREGUARD_ADDRESSES:-10.5.0.2/32}
+      WIREGUARD_MTU: ${WIREGUARD_MTU:-1320}
+      WIREGUARD_ENDPOINT_PORT: ${WIREGUARD_ENDPOINT_PORT:-51820}
+      SERVER_COUNTRIES: ${SERVER_COUNTRIES:-}
+      SERVER_REGIONS: ${SERVER_REGIONS:-}
+      SERVER_CITIES: ${SERVER_CITIES:-}
+      SERVER_HOSTNAMES: ${SERVER_HOSTNAMES:-}
+      EGRESS_DNS_SERVERS: ${EGRESS_DNS_SERVERS:-1.1.1.1,8.8.8.8}
+    volumes:
+      - type: bind
+        source: ${NORD_SNAPSHOT:-./nordvpn.json}
+        target: /etc/nordvpn/servers.json
+        read_only: true
+        bind:
+          create_host_path: false
+    secrets: [wg-key, ss-password]
+
+secrets:
+  wg-key:
+    file: ${NORD_WG_KEY_FILE:-./secrets/wg-key}
+  ss-password:
+    file: ${SS_PASSWORD_FILE:-./secrets/ss-password}

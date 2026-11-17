@@ -1,0 +1,4 @@
+**
+!egress/
+!egress/go.mod
+!egress/*.go
