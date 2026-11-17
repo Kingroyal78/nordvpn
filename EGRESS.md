@@ -6,6 +6,8 @@ This image replaces the Gluetun Shadowsocks egress on Sola nodes where shoes con
 
 The GitHub Actions workflow publishes `ghcr.io/kingroyal78/nordvpn-egress` for Linux amd64 and arm64. A passing `master` build publishes `sha-<full-commit>`. A passing `egress-v0.1.0` tag publishes `v0.1.0`. The workflow summary lists the digest to pin on the node. For a private package, sign in to GHCR on the node using the deployment account's read-only package credentials.
 
+The Debian image installs the official NordVPN Linux CLI and daemon from the signed NordVPN stable APT repository. `NORDVPN_VERSION` in the Dockerfile pins the client package across both architectures. To display its version, run `docker compose -f compose.egress.yml exec -T nordvpn-egress nordvpn --version`. The egress entrypoint uses kernel WireGuard for the Sola tunnel and owns the routing and firewall in its container.
+
 To build and exercise the image on a Linux development host with Docker, kernel WireGuard, Go 1.26, jq, curl and Python 3:
 
 ```bash

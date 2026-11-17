@@ -7,10 +7,49 @@ COPY egress/go.mod egress/*.go ./
 RUN go test ./... && \
     CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build -trimpath -ldflags="-s -w" -o /out/nordvpn-egress .
 
-FROM alpine:3.23
-RUN apk add --no-cache ca-certificates iproute2 nftables wireguard-tools-wg \
-        shadowsocks-rust-ssserver shadowsocks-rust-sslocal && \
-    addgroup -S -g 10001 egress && adduser -S -D -H -u 10001 -G egress egress
+FROM --platform=$BUILDPLATFORM debian:trixie-slim AS vendor
+ARG TARGETARCH
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl xz-utils
+WORKDIR /work
+RUN set -eu; \
+    curl --fail --silent --show-error --location --retry 3 \
+        https://repo.nordvpn.com/deb/nordvpn/debian/pool/main/n/nordvpn-release/nordvpn-release_1.0.0_all.deb \
+        -o nordvpn-release.deb; \
+    echo '16a05919b7259e679e4483aa39f61ef9bc9c07cbe040276e04884b5f9d7f933d  nordvpn-release.deb' | sha256sum -c -; \
+    dpkg-deb -x nordvpn-release.deb nordrepo; \
+    case "$TARGETARCH" in \
+        amd64) ss_arch=x86_64; ss_digest=0d84f5f350ec99396867d718f146fc3810975b2a7cd06192f158d96bdef460e7 ;; \
+        arm64) ss_arch=aarch64; ss_digest=e00b6551f40bb2d61adb2503909e0df6550c022372c812f3f34350510797ef2f ;; \
+        *) echo "Unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    curl --fail --silent --show-error --location --retry 3 \
+        "https://github.com/shadowsocks/shadowsocks-rust/releases/download/v1.24.0/shadowsocks-v1.24.0.$ss_arch-unknown-linux-musl.tar.xz" \
+        -o shadowsocks.tar.xz; \
+    echo "$ss_digest  shadowsocks.tar.xz" | sha256sum -c -; \
+    tar -xJf shadowsocks.tar.xz sslocal ssserver
+
+FROM debian:trixie-slim
+ARG NORDVPN_VERSION=6.0.2
+LABEL io.nordvpn.client.version=$NORDVPN_VERSION
+COPY --from=vendor /work/nordrepo/etc/apt/trusted.gpg.d/nordvpn-keyring.gpg /usr/share/keyrings/nordvpn.gpg
+RUN set -eu; \
+    export DEBIAN_FRONTEND=noninteractive; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates; \
+    printf '%s\n' 'deb [signed-by=/usr/share/keyrings/nordvpn.gpg] https://repo.nordvpn.com/deb/nordvpn/debian stable main' \
+        > /etc/apt/sources.list.d/nordvpn.list; \
+    printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d; \
+    chmod +x /usr/sbin/policy-rc.d; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends busybox iproute2 iptables nftables wireguard-tools "nordvpn=$NORDVPN_VERSION"; \
+    rm /usr/sbin/policy-rc.d; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*; \
+    groupadd --gid 10001 egress; \
+    useradd --no-create-home --uid 10001 --gid egress --shell /usr/sbin/nologin egress; \
+    test -x /usr/sbin/nordvpnd; \
+    nordvpn --version
+COPY --from=vendor /work/sslocal /work/ssserver /usr/local/bin/
 COPY --from=build /out/nordvpn-egress /usr/local/bin/nordvpn-egress
 
 EXPOSE 8388/tcp 8388/udp

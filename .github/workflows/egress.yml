@@ -48,12 +48,23 @@ jobs:
             --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             -f Dockerfile.egress -t "nordvpn-egress:test-$ARCH" .
+      - name: Verify the official NordVPN client
+        run: |
+          expected=$(sed -n 's/^ARG NORDVPN_VERSION=//p' Dockerfile.egress)
+          version=$(docker run --rm --network none --entrypoint nordvpn "nordvpn-egress:test-$ARCH" --version)
+          printf '%s\n' "$version"
+          [[ -n "$expected" && "$version" == "NordVPN Version $expected" ]]
       - name: Test WireGuard and Shadowsocks
         run: |
           if ! test -d /sys/module/wireguard; then
             sudo modprobe wireguard
           fi
-          egress/integration.sh "nordvpn-egress:test-$ARCH"
+          set -o pipefail
+          if ! egress/integration.sh "nordvpn-egress:test-$ARCH" 2>&1 | tee "$RUNNER_TEMP/egress-test.log"; then
+            error=$(grep -E 'Timed out waiting|"level":"ERROR"|RTNETLINK|Permission denied' "$RUNNER_TEMP/egress-test.log" | tail -n 1 || true)
+            printf '::error::%s\n' "${error:-WireGuard integration test failed}"
+            exit 1
+          fi
       - name: Export the tested image
         run: |
           mkdir -p image

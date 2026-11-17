@@ -126,15 +126,15 @@ no_direct_egress() {
         printf 'Proxied TCP escaped through the underlay\n' >&2
         return 1
     fi
-    if docker exec "$egress" wget -qO- -T 2 "http://$first_ip:8080/which"; then
+    if docker exec "$egress" busybox wget -qO- -T 2 "http://$first_ip:8080/which"; then
         printf 'TCP escaped through the underlay\n' >&2
         return 1
     fi
-    if docker exec "$egress" timeout 2 nslookup example.com "$first_ip" >/dev/null 2>&1; then
+    if docker exec "$egress" timeout 2 busybox nslookup example.com "$first_ip" >/dev/null 2>&1; then
         printf 'DNS escaped through the underlay\n' >&2
         return 1
     fi
-    if docker exec "$egress" timeout 2 nslookup "$first" 127.0.0.11 >/dev/null 2>&1; then
+    if docker exec "$egress" timeout 2 busybox nslookup "$first" 127.0.0.11 >/dev/null 2>&1; then
         printf 'DNS escaped through the Docker resolver\n' >&2
         return 1
     fi
@@ -147,6 +147,7 @@ for key in egress primary standby; do
     chmod 0600 "$work/$key.key"
 done
 client_public=$(public_key < "$work/egress.key")
+test_private_key=$(<"$work/egress.key")
 first_public=$(public_key < "$work/primary.key")
 second_public=$(public_key < "$work/standby.key")
 docker network create "$name" >/dev/null
@@ -157,8 +158,8 @@ second_ip=$(bridge_ip "$second")
 wait_until 10 curl -fsS --max-time 2 "http://$first_ip:8080/which"
 printf '\n'
 # A healthy underlay is the positive control for the later leak tests.
-docker exec "$second" timeout 3 nslookup example.com "$first_ip" >/dev/null
-docker exec "$second" timeout 3 nslookup "$first" 127.0.0.11 >/dev/null
+docker exec "$second" timeout 3 busybox nslookup example.com "$first_ip" >/dev/null
+docker exec "$second" timeout 3 busybox nslookup "$first" 127.0.0.11 >/dev/null
 
 jq -n --arg a "$first_ip" --arg b "$second_ip" --arg ak "$first_public" --arg bk "$second_public" '
     def peer($name; $ip; $key):
@@ -168,6 +169,11 @@ jq -n --arg a "$first_ip" --arg b "$second_ip" --arg ak "$first_public" --arg bk
 password=$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')
 printf '%s\n' "$password" > "$work/password"
 chmod 0600 "$work/password"
+# CI runners create files as an unprivileged host UID. The production
+# container reads root-owned secret files without CAP_DAC_OVERRIDE.
+docker run --rm --network none --entrypoint /bin/sh \
+    --mount "type=bind,source=$work,target=/test" "$image" \
+    -ec 'chown 0:0 /test/egress.key /test/password'
 
 ss_port=$(loopback_port)
 socks_port=$(loopback_port)
@@ -188,15 +194,15 @@ config=(
     -e 'EGRESS_IP_PROBE_URLS=http://10.5.0.1:8080/unavailable,http://10.5.0.1:8080/probe'
     -e 'EGRESS_NAME_PROBE_URLS=http://first.test:8080/unavailable,http://second.test:8080/probe'
 )
-docker run --rm --network none "${config[@]}" "$image" check-config |
+capabilities=(--cap-drop ALL --cap-add NET_ADMIN --cap-add CHOWN --cap-add SETUID --cap-add SETGID)
+docker run --rm --network none "${capabilities[@]}" "${config[@]}" "$image" check-config |
     jq -e '.country == "Testland" and .candidates == 2 and .port == 8388' >/dev/null
 if docker run --rm --network none "${config[@]}" -e SERVER_CITIES=missing "$image" check-config; then
     printf 'Invalid selection was accepted\n' >&2
     exit 1
 fi
 
-docker run -d --name "$egress" --network "$name" --init \
-    --cap-drop ALL --cap-add NET_ADMIN --cap-add CHOWN --cap-add SETUID --cap-add SETGID \
+docker run -d --name "$egress" --network "$name" --init "${capabilities[@]}" \
     --read-only --tmpfs /run:rw,nosuid,nodev,noexec --security-opt no-new-privileges=true \
     --sysctl net.ipv4.conf.all.rp_filter=2 \
     -p "127.0.0.1:$ss_port:8388/tcp" -p "127.0.0.1:$ss_port:8388/udp" "${config[@]}" "$image" >/dev/null
@@ -233,11 +239,11 @@ wait_until 40 ready_on primary.test
 [[ $(client_tcp) == "primary 10.5.0.2" ]]
 client_udp
 docker logs "$egress" > "$work/egress.log" 2>&1
-if grep -qF -f "$work/password" "$work/egress.log"; then
+if grep -qF -- "$password" "$work/egress.log"; then
     printf 'Logs contain the Shadowsocks password\n' >&2
     exit 1
 fi
-if grep -qF -f "$work/egress.key" "$work/egress.log"; then
+if grep -qF -- "$test_private_key" "$work/egress.log"; then
     printf 'Logs contain the WireGuard private key\n' >&2
     exit 1
 fi
